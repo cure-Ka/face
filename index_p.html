@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>MediaPipe Face Mesh (スマホ最適化版)</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+
+    <style>
+        body { 
+            margin: 0; 
+            padding: 0; 
+            background: #222; 
+            color: #fff; 
+            font-family: sans-serif; 
+            overflow: hidden; /* スクロールさせない */
+        }
+        h1, p { 
+            position: absolute; 
+            left: 10px; 
+            z-index: 10; 
+            margin: 5px 0;
+            font-size: 16px;
+            text-shadow: 1px 1px 3px rgba(0,0,0,0.8);
+        }
+        p { top: 30px; font-size: 12px; }
+
+        /* ②【画面の間延び修正】縦に長く、画面いっぱいに表示する設定 */
+        .container { 
+            position: relative; 
+            width: 100vw; 
+            height: 100vh; 
+        }
+        #webcam, #output_canvas { 
+            position: absolute; 
+            left: 0; 
+            top: 0; 
+            width: 100%; 
+            height: 100%; 
+            object-fit: cover; /* 比率を保ったまま画面全体に広げる（間延び防止） */
+            /* ④【反転・文字の鏡写し修正】
+               外カメラにするので、左右反転（鏡写し）の設定を完全に削除しました！ */
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Face Mesh (スマホ外カメ版)</h1>
+    <p>外カメラで相手の顔を映してみてください</p>
+
+    <div class="container">
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="output_canvas"></canvas>
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+
+        function onResults(results) {
+            canvasElement.width = videoElement.videoWidth;
+            canvasElement.height = videoElement.videoHeight;
+
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiFaceLandmarks) {
+                for (const landmarks of results.multiFaceLandmarks) {
+                    // メッシュの描画
+                    drawConnectors(canvasCtx, landmarks, FACEMESH_TESSELATION, {color: '#00FF00', lineWidth: 1});
+
+                    const nose = landmarks[1];       
+                    const leftEye = landmarks[33];   
+                    const rightEye = landmarks[263]; 
+
+                    // 目の位置の赤い丸
+                    canvasCtx.fillStyle = '#FF0000';
+                    canvasCtx.beginPath();
+                    canvasCtx.arc(nose.x * canvasElement.width, nose.y * canvasElement.height, 5, 0, 2 * Math.PI);
+                    canvasCtx.arc(leftEye.x * canvasElement.width, leftEye.y * canvasElement.height, 5, 0, 2 * Math.PI);
+                    canvasCtx.arc(rightEye.x * canvasElement.width, rightEye.y * canvasElement.height, 5, 0, 2 * Math.PI);
+                    canvasCtx.fill();
+
+                    // 鼻の位置の比率
+                    const distanceLeftToNose = nose.x - leftEye.x;
+                    const distanceLeftToRight = rightEye.x - leftEye.x;
+                    const ratio = distanceLeftToNose / distanceLeftToRight; 
+
+                    // ⑤【文字の位置調整】
+                    // カメラ画像自体のサイズに合わせた位置（左上から少し内側）に文字を描画
+                    canvasCtx.fillStyle = '#00FF00';
+                    // スマホの縦画面でも文字が小さくなりすぎないようにサイズ調整
+                    const fontSize = Math.round(canvasElement.width * 0.05); 
+                    canvasCtx.font = `bold ${fontSize}px sans-serif`;
+                    
+                    // 外カメラ（鏡写しじゃない状態）になったので、左右の判定基準をパソコン版と逆に修正
+                    if (ratio > 0.42 && ratio < 0.58) {
+                        canvasCtx.fillText('こっち見てる！ 😊', canvasElement.width * 0.1, canvasElement.height * 0.15);
+                    } else if (ratio <= 0.42) {
+                        canvasCtx.fillText('👉 右を向いています', canvasElement.width * 0.1, canvasElement.height * 0.15);
+                    } else {
+                        canvasCtx.fillText('👈 左を向いています', canvasElement.width * 0.1, canvasElement.height * 0.15);
+                    }
+                }
+            }
+            canvasCtx.restore();
+        }
+
+        const faceMesh = new FaceMesh({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+        }});
+        
+        faceMesh.setOptions({
+            maxNumFaces: 1,
+            refineLandmarks: true,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+        faceMesh.onResults(onResults);
+
+        // ③【外カメラ指定】「facingMode: "environment"」で外カメを強制起動
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await faceMesh.send({image: videoElement});
+            },
+            width: 1280,
+            height: 720,
+            facingMode: 'environment' // これが外カメラの魔法の呪文です
+        });
+        camera.start();
+    </script>
+</body>
+</html>
