@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MediaPipe Face Mesh (JS版)</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+
+    <style>
+        body { text-align: center; font-family: sans-serif; background: #222; color: #fff; }
+        .container { position: relative; width: 640px; height: 480px; margin: 20px auto; }
+        /* カメラ映像と描画用キャンバスを重ね合わせる設定 */
+        #webcam, #output_canvas { position: absolute; left: 0; top: 0; width: 640px; height: 480px; transform: scaleX(-1); } /* 鏡写しにする */
+    </style>
+</head>
+<body>
+
+    <h1>MediaPipe Face Mesh (ブラウザ版)</h1>
+    <p>カメラの許可をオンにしてください。スマホでも動きます！</p>
+
+    <div class="container">
+        <video id="webcam" autoplay playsinline></video>
+        <canvas id="output_canvas"></canvas>
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+
+        // メッシュ描画の設定
+        function onResults(results) {
+            canvasElement.width = videoElement.videoWidth;
+            canvasElement.height = videoElement.videoHeight;
+
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiFaceLandmarks) {
+                for (const landmarks of results.multiFaceLandmarks) {
+                    // 1. メッシュを描画
+                    drawConnectors(canvasCtx, landmarks, FACEMESH_TESSELATION, {color: '#00FF00', lineWidth: 1});
+
+                    // 2. 必要なパーツの「座標」を抽出 (0〜1の割合で入っているので画素数にかける)
+                    const nose = landmarks[1];       // 鼻の頭 (インデックス1)
+                    const leftEye = landmarks[33];   // 左目の外側の端 (インデックス33)
+                    const rightEye = landmarks[263]; // 右目の外側の端 (インデックス263)
+
+                    // 3. 画面に目の位置に丸を描いてみる（確認用）
+                    canvasCtx.fillStyle = '#GF7532';
+                    canvasCtx.beginPath();
+                    canvasCtx.arc(nose.x * canvasElement.width, nose.y * canvasElement.height, 5, 0, 2 * Math.PI);
+                    canvasCtx.arc(leftEye.x * canvasElement.width, leftEye.y * canvasElement.height, 5, 0, 2 * Math.PI);
+                    canvasCtx.arc(rightEye.x * canvasElement.width, rightEye.y * canvasElement.height, 5, 0, 2 * Math.PI);
+                    canvasCtx.fill();
+
+                    // 4. 【 Javaの知識が活きる判定ロジック！】
+                    // 鼻が、両目の間のどの位置にあるかの比率を計算する
+                    const distanceLeftToNose = nose.x - leftEye.x;
+                    const distanceLeftToRight = rightEye.x - leftEye.x;
+                    const ratio = distanceLeftToNose / distanceLeftToRight; // 正面なら約0.5になる
+
+                    // 5. 画面に判定結果を表示する
+                    canvasCtx.fillStyle = '#00FF00';
+                    canvasCtx.font = 'bold 30px sans-serif';
+                    
+                    // 0.45〜0.55の間なら「正面（こっちを見てる）」と判定
+                    if (ratio > 0.42 && ratio < 0.58) {
+                        canvasCtx.fillText('こっち見てる！ 😊', 50, 50);
+                    } else if (ratio <= 0.42) {
+                        canvasCtx.fillText('👈 右を向いています', 50, 50);
+                    } else {
+                        canvasCtx.fillText('左を向いています 👉', 50, 50);
+                    }
+                }
+            }
+            canvasCtx.restore();
+        }
+
+        // MediaPipe Face Meshの初期化設定
+        const faceMesh = new FaceMesh({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+        }});
+        
+        faceMesh.setOptions({
+            maxNumFaces: 1,
+            refineLandmarks: true,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+        faceMesh.onResults(onResults);
+
+        // Webカメラを起動してMediaPipeと連動させる
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await faceMesh.send({image: videoElement});
+            },
+            width: 640,
+            height: 480
+        });
+        camera.start();
+    </script>
+</body>
+</html>
