@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>MediaPipe Face Mesh (スマホ最適化版)</title>
+    <title>MediaPipe Face Mesh (角度・上下左右検知版)</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
@@ -16,7 +16,7 @@
             background: #222; 
             color: #fff; 
             font-family: sans-serif; 
-            overflow: hidden; /* スクロールさせない */
+            overflow: hidden; 
         }
         h1, p { 
             position: absolute; 
@@ -28,7 +28,6 @@
         }
         p { top: 30px; font-size: 12px; }
 
-        /* ②【画面の間延び修正】縦に長く、画面いっぱいに表示する設定 */
         .container { 
             position: relative; 
             width: 100vw; 
@@ -40,16 +39,14 @@
             top: 0; 
             width: 100%; 
             height: 100%; 
-            object-fit: cover; /* 比率を保ったまま画面全体に広げる（間延び防止） */
-            /* ④【反転・文字の鏡写し修正】
-               外カメラにするので、左右反転（鏡写し）の設定を完全に削除しました！ */
+            object-fit: cover; 
         }
     </style>
 </head>
 <body>
 
-    <h1>Face Mesh (スマホ外カメ版)</h1>
-    <p>外カメラで相手の顔を映してみてください</p>
+    <h1>Face Mesh (角度＆上下左右検知)</h1>
+    <p>外カメラで顔を映すとリアルタイムで角度を計算します</p>
 
     <div class="container">
         <video id="webcam" autoplay playsinline muted></video>
@@ -61,6 +58,7 @@
         const canvasElement = document.getElementById('output_canvas');
         const canvasCtx = canvasElement.getContext('2d');
 
+        // ★ ここから onResults 関数を丸ごとアップデートしました！
         function onResults(results) {
             canvasElement.width = videoElement.videoWidth;
             canvasElement.height = videoElement.videoHeight;
@@ -71,40 +69,66 @@
 
             if (results.multiFaceLandmarks) {
                 for (const landmarks of results.multiFaceLandmarks) {
-                    // メッシュの描画
+                    // 1. 顔のメッシュ（網の目）を描画
                     drawConnectors(canvasCtx, landmarks, FACEMESH_TESSELATION, {color: '#00FF00', lineWidth: 1});
 
-                    const nose = landmarks[1];       
-                    const leftEye = landmarks[33];   
-                    const rightEye = landmarks[263]; 
+                    // 2. 角度計算に必要なパーツの3D座標（X, Y, Z）をピンポイントで抽出
+                    const nose = landmarks[1];        // 鼻の頭
+                    const leftCheek = landmarks[234];  // 左顔の端（耳の前）
+                    const rightCheek = landmarks[454]; // 右顔の端（耳の前）
+                    const forehead = landmarks[10];    // おでこ
+                    const chin = landmarks[152];       // あごの先
 
-                    // 目の位置の赤い丸
+                    // 3. 認識の確認用にパーツの位置に赤い丸を描画
                     canvasCtx.fillStyle = '#FF0000';
                     canvasCtx.beginPath();
-                    canvasCtx.arc(nose.x * canvasElement.width, nose.y * canvasElement.height, 5, 0, 2 * Math.PI);
-                    canvasCtx.arc(leftEye.x * canvasElement.width, leftEye.y * canvasElement.height, 5, 0, 2 * Math.PI);
-                    canvasCtx.arc(rightEye.x * canvasElement.width, rightEye.y * canvasElement.height, 5, 0, 2 * Math.PI);
+                    [nose, leftCheek, rightCheek, forehead, chin].forEach(pt => {
+                        canvasCtx.arc(pt.x * canvasElement.width, pt.y * canvasElement.height, 5, 0, 2 * Math.PI);
+                    });
                     canvasCtx.fill();
 
-                    // 鼻の位置の比率
-                    const distanceLeftToNose = nose.x - leftEye.x;
-                    const distanceLeftToRight = rightEye.x - leftEye.x;
-                    const ratio = distanceLeftToNose / distanceLeftToRight; 
+                    // 4. 【左右の角度（Yaw）の計算】
+                    // 左右の端のちょうど真ん中のX座標を計算
+                    const midX = (leftCheek.x + rightCheek.x) / 2;
+                    const widthFace = rightCheek.x - leftCheek.x;
+                    const offsetX = nose.x - midX;
+                    // 数学の「アークタンジェント」を使ってズレを角度（°）に変換
+                    let angleX = Math.atan2(offsetX, widthFace) * (180 / Math.PI) * 1.5;
 
-                    // ⑤【文字の位置調整】
-                    // カメラ画像自体のサイズに合わせた位置（左上から少し内側）に文字を描画
+                    // 5. 【上下の角度（Pitch）の計算】
+                    // おでことあごのちょうど真ん中のY座標を計算
+                    const midY = (forehead.y + chin.y) / 2;
+                    const heightFace = chin.y - forehead.y;
+                    const offsetY = nose.y - midY;
+                    let angleY = Math.atan2(offsetY, heightFace) * (180 / Math.PI) * 1.5;
+
+                    // 小数を四捨五入して見やすい整数にする
+                    const yaw = Math.round(angleX);
+                    const pitch = Math.round(angleY);
+
+                    // 6. 画面にテキストと数値を描画する設定
                     canvasCtx.fillStyle = '#00FF00';
-                    // スマホの縦画面でも文字が小さくなりすぎないようにサイズ調整
-                    const fontSize = Math.round(canvasElement.width * 0.05); 
+                    const fontSize = Math.round(canvasElement.width * 0.045); 
                     canvasCtx.font = `bold ${fontSize}px sans-serif`;
                     
-                    // 外カメラ（鏡写しじゃない状態）になったので、左右の判定基準をパソコン版と逆に修正
-                    if (ratio > 0.42 && ratio < 0.58) {
-                        canvasCtx.fillText('こっち見てる！ 😊', canvasElement.width * 0.1, canvasElement.height * 0.15);
-                    } else if (ratio <= 0.42) {
-                        canvasCtx.fillText('👉 右を向いています', canvasElement.width * 0.1, canvasElement.height * 0.15);
+                    // 画面上部に常に現在の角度をリアルタイム表示
+                    canvasCtx.fillText(`左右: ${yaw}°  上下: ${pitch}°`, canvasElement.width * 0.05, canvasElement.height * 0.12);
+
+                    // 7. 角度に基づいた状態の判定ロジック
+                    // 左右も上下も「5度以内」の傾きなら「正面（こっち見てる）」と判定
+                    if (Math.abs(yaw) < 6 && Math.abs(pitch) < 6) {
+                        canvasCtx.fillStyle = '#00FFFF'; // 正面はキレイな水色文字
+                        canvasCtx.fillText('こっち見てる！ 😊', canvasElement.width * 0.05, canvasElement.height * 0.20);
                     } else {
-                        canvasCtx.fillText('👈 左を向いています', canvasElement.width * 0.1, canvasElement.height * 0.15);
+                        let statusText = "";
+                        // 外カメラの向きに合わせて表示文字を調整
+                        if (yaw > 5) statusText += "右を向いてる ";
+                        if (yaw < -5) statusText += "左を向いてる ";
+                        if (pitch > 5) statusText += "下を向いてる ";
+                        if (pitch < -5) statusText += "上を向いてる ";
+                        
+                        canvasCtx.fillStyle = '#FFCC00'; // 動いているときは目立つ黄色文字
+                        canvasCtx.fillText(statusText, canvasElement.width * 0.05, canvasElement.height * 0.20);
                     }
                 }
             }
@@ -123,14 +147,13 @@
         });
         faceMesh.onResults(onResults);
 
-        // ③【外カメラ指定】「facingMode: "environment"」で外カメを強制起動
         const camera = new Camera(videoElement, {
             onFrame: async () => {
                 await faceMesh.send({image: videoElement});
             },
             width: 1280,
             height: 720,
-            facingMode: 'environment' // これが外カメラの魔法の呪文です
+            facingMode: 'environment' // 外カメラ起動
         });
         camera.start();
     </script>
